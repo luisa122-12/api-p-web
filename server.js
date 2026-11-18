@@ -1,200 +1,119 @@
-
+import { db } from "./db.js";
 import express from "express";
 
-const servidor = express();
+const app = express();
+app.use(express.json());
+app.set("json spaces", 2);
 
-servidor.use(express.json());
-servidor.set("json spaces", 2);
-
-// INVENTARIO DE LA TIENDA DE VÍVERES
-
-let inventario = [
-    { codigo: 1, producto: "Arroz", costo: 4500, unidades: 100 },
-    { codigo: 2, producto: "Lentejas", costo: 5200, unidades: 60 },
-    { codigo: 3, producto: "Sardinas en lata", costo: 6500, unidades: 45 },
-    { codigo: 4, producto: "Aceite vegetal", costo: 8500, unidades: 35 },
-    { codigo: 5, producto: "Azúcar", costo: 4000, unidades: 80 },
-    { codigo: 6, producto: "Fríjoles", costo: 5800, unidades: 55 },
-    { codigo: 7, producto: "Pasta", costo: 3000, unidades: 90 },
-    { codigo: 8, producto: "Sal", costo: 2000, unidades: 70 },
-];
-
-let contadorCodigo = 9;
-
-// REGISTRO DE SOLICITUDES
-
-servidor.use((req, res, next) => {
-    const hora = new Date().toLocaleTimeString("es-CO");
-
-    console.log(`${hora} -> ${req.method} ${req.originalUrl}`);
-
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     next();
 });
 
-// VALIDAR NÚMEROS
+app.get("/inventario", async (req, res) => {
+    try {
+        const { titulo } = req.query;
+        if (titulo) {
+            const [filas] = await db.query("SELECT * FROM productos WHERE titulo LIKE ?", [`%${titulo}%`]);
+            return res.status(200).json(filas);
+        }
+        const [filas] = await db.query("SELECT * FROM productos");
+        res.status(200).json(filas);
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
+    }
+});
 
-const esNumeroValido = (valor) =>
-    typeof valor === "number" &&
-    !Number.isNaN(valor) &&
-    valor >= 0;
+app.get("/inventario/:id", async (req, res) => {
+    try {
+        const [filas] = await db.query("SELECT * FROM productos WHERE id = ?", [req.params.id]);
+        if (filas.length === 0) {
+            return res.status(404).json({ error: "Artículo no encontrado" });
+        }
+        res.status(200).json(filas[0]);
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
+    }
+});
 
-// CONSULTAR TODOS LOS PRODUCTOS Y BUSCAR POR NOMBRE
+app.post("/inventario", async (req, res) => {
+    try {
+        const { titulo, valor, existencias } = req.body;
+        if (!titulo || valor === undefined) {
+            return res.status(400).json({ error: "Datos incompletos: titulo y valor son requeridos" });
+        }
+        const stock = existencias !== undefined ? existencias : 0;
+        
+        const [resultado] = await db.query(
+            "INSERT INTO productos (nombre, precio, stock) VALUES (?, ?, ?)",
+            [titulo, valor, stock]
+        );
+        
+        res.status(201).json({ id: resultado.insertId, titulo, valor, existencias: stock });
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
+    }
+});
 
-servidor.get("/inventario", (req, res) => {
-    const { buscar } = req.query;
+app.put("/inventario/:id", async (req, res) => {
+    try {
+        const { titulo, valor, existencias } = req.body;
+        if (!titulo || valor === undefined || existencias === undefined) {
+            return res.status(400).json({ error: "Datos incompletos: titulo, valor y existencias son requeridos" });
+        }
 
-    if (buscar) {
-        const resultado = inventario.filter((item) =>
-            item.producto.toLowerCase().includes(buscar.toLowerCase())
+        const [resultado] = await db.query(
+            "UPDATE productos SET nombre = ?, precio = ?, stock = ? WHERE id = ?",
+            [titulo, valor, existencias, req.params.id]
         );
 
-        return res.status(200).json(resultado);
-    }
-
-    res.status(200).json(inventario);
-});
-
-// CONSULTAR UN PRODUCTO POR SU CÓDIGO
-
-servidor.get("/inventario/:codigo", (req, res) => {
-    const codigo = Number(req.params.codigo);
-
-    const item = inventario.find((x) => x.codigo === codigo);
-
-    if (!item) {
-        return res.status(404).json({
-            mensaje: "El producto no existe en el inventario"
-        });
-    }
-
-    res.status(200).json(item);
-});
-
-// AGREGAR UN NUEVO PRODUCTO
-
-servidor.post("/inventario", (req, res) => {
-    const { producto, costo } = req.body;
-
-    if (!producto || !esNumeroValido(costo)) {
-        return res.status(400).json({
-            mensaje: "Debes enviar 'producto' y un 'costo' numérico válido"
-        });
-    }
-
-    const nuevoItem = {
-        codigo: contadorCodigo++,
-        producto,
-        costo,
-        unidades: 0
-    };
-
-    inventario.push(nuevoItem);
-
-    res.status(201).json(nuevoItem);
-});
-
-// ACTUALIZAR COMPLETAMENTE UN PRODUCTO (PUT)
-
-servidor.put("/inventario/:codigo", (req, res) => {
-    const codigo = Number(req.params.codigo);
-
-    const indice = inventario.findIndex((x) => x.codigo === codigo);
-
-    if (indice === -1) {
-        return res.status(404).json({
-            mensaje: "El producto no existe en el inventario"
-        });
-    }
-
-    const { producto, costo, unidades } = req.body;
-
-    if (
-        !producto ||
-        !esNumeroValido(costo) ||
-        !esNumeroValido(unidades)
-    ) {
-        return res.status(400).json({
-            mensaje: "Se requieren 'producto', 'costo' y 'unidades' válidos"
-        });
-    }
-
-    inventario[indice] = {
-        codigo,
-        producto,
-        costo,
-        unidades
-    };
-
-    res.status(200).json(inventario[indice]);
-});
-
-// ACTUALIZAR PARCIALMENTE UN PRODUCTO (PATCH)
-
-servidor.patch("/inventario/:codigo", (req, res) => {
-    const codigo = Number(req.params.codigo);
-
-    const item = inventario.find((x) => x.codigo === codigo);
-
-    if (!item) {
-        return res.status(404).json({
-            mensaje: "El producto no existe en el inventario"
-        });
-    }
-
-    const { producto, costo, unidades } = req.body;
-
-    if (producto !== undefined) {
-        if (typeof producto !== "string" || !producto.trim()) {
-            return res.status(400).json({
-                mensaje: "El nombre del producto no es válido"
-            });
+        if (resultado.affectedRows === 0) {
+            return res.status(404).json({ error: "Artículo no encontrado" });
         }
-        item.producto = producto;
-    }
 
-    if (costo !== undefined) {
-        if (!esNumeroValido(costo)) {
-            return res.status(400).json({
-                mensaje: "El costo debe ser un número válido"
-            });
+        res.status(200).json({ id: Number(req.params.id), titulo, valor, existencias });
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
+    }
+});
+
+app.patch("/inventario/:id", async (req, res) => {
+    try {
+        const { titulo, valor, existencias } = req.body;
+        
+        const [filas] = await db.query("SELECT * FROM productos WHERE id = ?", [req.params.id]);
+        if (filas.length === 0) {
+            return res.status(404).json({ error: "Artículo no encontrado" });
         }
-        item.costo = costo;
-    }
 
-    if (unidades !== undefined) {
-        if (!esNumeroValido(unidades)) {
-            return res.status(400).json({
-                mensaje: "Las unidades deben ser un número válido"
-            });
+        const actual = filas[0];
+        const nuevoTitulo = titulo !== undefined ? titulo : actual.nombre;
+        const nuevoValor = valor !== undefined ? valor : actual.precio;
+        const nuevasExistencias = existencias !== undefined ? existencias : actual.stock;
+
+        await db.query(
+            "UPDATE productos SET nombre = ?, precio = ?, stock = ? WHERE id = ?",
+            [nuevoTitulo, nuevoValor, nuevasExistencias, req.params.id]
+        );
+
+        res.status(200).json({ id: Number(req.params.id), titulo: nuevoTitulo, valor: nuevoValor, existencias: nuevasExistencias });
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
+    }
+});
+
+app.delete("/inventario/:id", async (req, res) => {
+    try {
+        const [resultado] = await db.query("DELETE FROM productos WHERE id = ?", [req.params.id]);
+        
+        if (resultado.affectedRows === 0) {
+            return res.status(404).json({ error: "Artículo no encontrado" });
         }
-        item.unidades = unidades;
+        
+        res.status(204).end();
+    } catch (error) {
+        res.status(500).json({ error: "Error en la base de datos" });
     }
-
-    res.status(200).json(item);
 });
 
-// ELIMINAR UN PRODUCTO
-
-servidor.delete("/inventario/:codigo", (req, res) => {
-    const codigo = Number(req.params.codigo);
-
-    const indice = inventario.findIndex((x) => x.codigo === codigo);
-
-    if (indice === -1) {
-        return res.status(404).json({
-            mensaje: "El producto no existe en el inventario"
-        });
-    }
-
-    inventario.splice(indice, 1);
-
-    res.status(204).end();
-});
-
-// INICIAR SERVIDOR
-
-servidor.listen(3003, () => {
-    console.log(
-        "API de tienda de víveres activa en http://localhost:3003"
-    );
-});
+app.listen(3003, () => console.log("Servidor corriendo en http://localhost:3003"));
